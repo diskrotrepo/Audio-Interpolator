@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Local Audio Averager — No Dependencies</title>
+  <style>
+    :root {
+      --bg: #0f1216; --panel: #151a21; --panel-2: #1b2230; --text: #e7edf3; --muted:#aab6c4; --accent:#6bc2ff; --ok:#7dd87d; --warn:#ffd56b;
+      --radius: 16px; --shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 20% -10%, #17202b, #0b0e12 60%);
+      color: var(--text);
+    }
+    .wrap { max-width: 980px; margin: 48px auto; padding: 0 20px; }
+    header { display:flex; gap: 16px; align-items:center; justify-content:space-between; margin-bottom: 20px; }
+    .title { font-size: 24px; font-weight: 700; letter-spacing:.2px }
+    .card { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .drop { border: 1.5px dashed #2b394a; border-radius: 14px; padding: 18px; min-height: 130px; display:flex; align-items:center; justify-content:center; text-align:center; color:var(--muted); background: rgba(255,255,255,.02); }
+    .drop.dragover { border-color: var(--accent); color: var(--accent); background: rgba(107,194,255,.06); }
+    .drop input[type="file"] { display:none; }
+    .drop label { cursor:pointer; display:inline-block; padding:10px 14px; border-radius:12px; background:#0f151d; border:1px solid #273444; color:var(--text); }
+
+    .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top: 14px; }
+    button { cursor:pointer; border:1px solid #2a3a4b; background:#0f151d; color:var(--text); padding:10px 16px; border-radius:12px; font-weight:600; transition: transform .06s ease, background .2s ease, border-color .2s ease; }
+    button:hover { transform: translateY(-1px); border-color: #395063; }
+    button.primary { background: linear-gradient(180deg, #0c2333, #0b1621); border-color:#395063; }
+    button:disabled { opacity:.55; cursor:not-allowed; transform:none }
+
+    .meta { font-size: 13px; color: var(--muted); margin-top: 8px; }
+    .result { margin-top: 18px; display:grid; grid-template-columns: 1fr; gap: 12px; }
+    .audio { background:#0d141c; border:1px solid #273444; border-radius:12px; padding:12px; }
+
+    canvas { width:100%; height: 100px; display:block; background: #0b0f14; border-radius:12px; border:1px solid #273444; }
+    .tag { display:inline-flex; align-items:center; gap:7px; font-size:12px; background:#0a121b; border:1px solid #273444; padding:6px 10px; border-radius:999px; color:#c4d2e1 }
+    .tag .dot { width:7px; height:7px; background:var(--ok); border-radius:999px }
+
+    .footer { margin-top: 18px; font-size:12px; color:#98a7b8 }
+    a.dl { text-decoration:none; font-weight:700; color:#bfe3ff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">Local Audio Averager</div>
+      <div class="tag" title="All processing stays in your browser."><span class="dot"></span> offline · local</div>
+    </header>
+
+    <div class="card">
+      <div class="row">
+        <div class="drop" id="dropA">
+          <div>
+            <div style="margin-bottom:8px; font-weight:700; color:#d5e3f1">Track A</div>
+            <div>Drop an audio file here, or <label><input id="fileA" type="file" accept="audio/*">choose a file</label></div>
+            <div class="meta" id="metaA"></div>
+          </div>
+        </div>
+        <div class="drop" id="dropB">
+          <div>
+            <div style="margin-bottom:8px; font-weight:700; color:#d5e3f1">Track B</div>
+            <div>Drop an audio file here, or <label><input id="fileB" type="file" accept="audio/*">choose a file</label></div>
+            <div class="meta" id="metaB"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="processBtn" disabled>Average Tracks</button>
+        <button id="clearBtn">Clear</button>
+        <span class="meta" id="status">Pick two files (MP3, WAV, OGG, M4A… as your browser supports).</span>
+      </div>
+
+      <div class="result" id="result" hidden>
+        <div class="audio">
+          <audio id="player" controls></audio>
+          <div class="meta" id="stats"></div>
+        </div>
+        <canvas id="wave"></canvas>
+        <div class="footer">Saved locally as a WAV (16‑bit PCM) for compatibility. No uploads, no libraries.</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---- Utilities -----------------------------------------------------------
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+  const fileEls = { A: $('#fileA'), B: $('#fileB') };
+  const dropEls = { A: $('#dropA'), B: $('#dropB') };
+  const metaEls = { A: $('#metaA'), B: $('#metaB') };
+  const processBtn = $('#processBtn');
+  const clearBtn = $('#clearBtn');
+  const statusEl = $('#status');
+  const resultWrap = $('#result');
+  const player = $('#player');
+  const stats = $('#stats');
+  const wave = $('#wave');
+
+  let files = { A: null, B: null };
+  let lastBlobUrl = null;
+
+  const TARGET_SAMPLE_RATE = 44100; // Common denominator; browsers will resample if needed
+
+  function humanTime(seconds) {
+    if (!isFinite(seconds)) return '—';
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60).toString().padStart(2,'0');
+    return `${m}:${s}`;
+  }
+  function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
+
+  function setStatus(text, kind='info') {
+    statusEl.textContent = text;
+    statusEl.style.color = kind === 'error' ? '#ff9c9c' : kind === 'ok' ? '#8ef18e' : '#aab6c4';
+  }
+
+  function enableProcessIfReady(){ processBtn.disabled = !(files.A && files.B); }
+
+  function hookDrop(zoneKey){
+    const dz = dropEls[zoneKey];
+    dz.addEventListener('dragover', (e)=>{ e.preventDefault(); dz.classList.add('dragover'); });
+    dz.addEventListener('dragleave', ()=> dz.classList.remove('dragover'));
+    dz.addEventListener('drop', (e)=>{
+      e.preventDefault(); dz.classList.remove('dragover');
+      const f = e.dataTransfer.files?.[0]; if (f) setFile(zoneKey, f);
+    });
+  }
+
+  async function setFile(zoneKey, file){
+    files[zoneKey] = file;
+    metaEls[zoneKey].textContent = `${file.name} • ${(file.size/1024/1024).toFixed(2)} MB`;
+    enableProcessIfReady();
+    setStatus('Ready to average.');
+  }
+
+  Object.entries(fileEls).forEach(([k, el])=>{
+    el.addEventListener('change', (e)=>{ const f = el.files?.[0]; if (f) setFile(k, f); });
+  });
+  hookDrop('A'); hookDrop('B');
+
+  clearBtn.addEventListener('click', ()=>{
+    files = { A: null, B: null };
+    Object.values(fileEls).forEach(el=> el.value='');
+    Object.values(metaEls).forEach(el=> el.textContent='');
+    processBtn.disabled = true; setStatus('Pick two files.');
+    resultWrap.hidden = true; if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+  });
+
+  processBtn.addEventListener('click', async ()=>{
+    if (!(files.A && files.B)) return;
+    processBtn.disabled = true; setStatus('Decoding audio… this runs locally.');
+
+    try {
+      const { buffer: bufA, info: infoA } = await decodeFile(files.A);
+      const { buffer: bufB, info: infoB } = await decodeFile(files.B);
+
+      setStatus('Normalizing sample rates/channels…');
+
+      const targetSR = TARGET_SAMPLE_RATE;
+      const A = (bufA.sampleRate === targetSR) ? bufA : await resampleBuffer(bufA, targetSR);
+      const B = (bufB.sampleRate === targetSR) ? bufB : await resampleBuffer(bufB, targetSR);
+
+      const maxCh = Math.max(A.numberOfChannels, B.numberOfChannels);
+      const minFrames = Math.min(A.length, B.length);
+      const duration = minFrames / targetSR;
+
+      // Average the samples, channel-by-channel
+      const out = new AudioBuffer({ length: minFrames, numberOfChannels: maxCh, sampleRate: targetSR });
+      for (let ch = 0; ch < maxCh; ch++) {
+        const outData = out.getChannelData(ch);
+        const aData = getChannelOrFallback(A, ch);
+        const bData = getChannelOrFallback(B, ch);
+        for (let i=0; i<minFrames; i++) {
+          // Mean of the two waveforms
+          outData[i] = (aData[i] + bData[i]) * 0.5;
+        }
+      }
+
+      // Export to WAV (16-bit PCM) for broad compatibility
+      setStatus('Rendering WAV…');
+      const wavBlob = audioBufferToWav(out);
+      const url = URL.createObjectURL(wavBlob);
+      if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+      lastBlobUrl = url;
+
+      // Update UI
+      player.src = url; player.load();
+      stats.textContent = `Result: ${maxCh} ch · ${targetSR} Hz · ${humanTime(duration)} · ${bytesHuman(wavBlob.size)}`;
+      resultWrap.hidden = false;
+      drawWaveform(out, wave);
+
+      // Offer a download
+      const dlName = suggestOutName(files.A?.name, files.B?.name);
+      addOrUpdateDownloadLink(url, dlName);
+
+      setStatus('Done! Everything was processed locally.', 'ok');
+    } catch (err) {
+      console.error(err);
+      setStatus(`Error: ${err?.message || err}`, 'error');
+    } finally {
+      processBtn.disabled = !(files.A && files.B);
+    }
+  });
+
+  function bytesHuman(n){
+    if (n < 1024) return n + ' B';
+    const u = ['KB','MB','GB']; let i = -1; do { n/=1024; i++; } while (n>=1024 && i<u.length-1);
+    return n.toFixed(n<10?2:1)+' '+u[i];
+  }
+
+  function suggestOutName(a, b){
+    function base(n){ return (n||'track').replace(/\.[^.]+$/, ''); }
+    return `${base(a)}__AVERAGE__${base(b)}.wav`;
+  }
+
+  function addOrUpdateDownloadLink(url, name){
+    let a = document.querySelector('a.dl');
+    if (!a){
+      a = document.createElement('a');
+      a.className = 'dl'; a.download = name; a.href = url; a.textContent = 'Download WAV';
+      const footer = document.createElement('div'); footer.className='footer'; footer.appendChild(a);
+      resultWrap.appendChild(footer);
+    } else {
+      a.download = name; a.href = url;
+    }
+  }
+
+  // ---- Core audio helpers --------------------------------------------------
+  async function decodeFile(file){
+    const arrayBuffer = await file.arrayBuffer();
+    // Try to create a decoding context at our target sample rate for consistency.
+    let ctx;
+    try { ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SAMPLE_RATE }); }
+    catch { ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    const buffer = await ctx.decodeAudioData(arrayBuffer);
+    // We don't keep the context around; release resources
+    ctx.close();
+    const info = { name: file.name, size: file.size, channels: buffer.numberOfChannels, sampleRate: buffer.sampleRate, duration: buffer.duration };
+    return { buffer, info };
+  }
+
+  function getChannelOrFallback(buf, ch){
+    const n = buf.numberOfChannels;
+    if (ch < n) return buf.getChannelData(ch);
+    // Fallback: if buffer has fewer channels, reuse channel 0 (mono duplication) or last channel.
+    return buf.getChannelData(Math.min(0, n-1));
+  }
+
+  async function resampleBuffer(sourceBuffer, targetSampleRate){
+    const length = Math.max(1, Math.round(sourceBuffer.duration * targetSampleRate));
+    const channels = sourceBuffer.numberOfChannels;
+    const off = new OfflineAudioContext(channels, length, targetSampleRate);
+    const src = off.createBufferSource();
+    src.buffer = sourceBuffer; src.connect(off.destination); src.start();
+    const rendered = await off.startRendering();
+    return rendered;
+  }
+
+  function audioBufferToWav(buffer){
+    // 16-bit PCM WAV
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const numFrames = buffer.length;
+
+    // Interleave
+    const channelData = [];
+    for (let ch=0; ch<numChannels; ch++) channelData.push(buffer.getChannelData(ch));
+
+    const bytesPerSample = 2; // 16-bit
+    const blockAlign = numChannels * bytesPerSample;
+    const dataSize = numFrames * blockAlign;
+    const bufferSize = 44 + dataSize; // WAV header is 44 bytes
+    const ab = new ArrayBuffer(bufferSize);
+    const dv = new DataView(ab);
+
+    // Helper to write string
+    function writeStr(offset, str){ for (let i=0; i<str.length; i++) dv.setUint8(offset+i, str.charCodeAt(i)); }
+
+    // RIFF header
+    writeStr(0, 'RIFF');
+    dv.setUint32(4, 36 + dataSize, true);
+    writeStr(8, 'WAVE');
+
+    // fmt chunk
+    writeStr(12, 'fmt ');
+    dv.setUint32(16, 16, true); // chunk size
+    dv.setUint16(20, 1, true);  // PCM format
+    dv.setUint16(22, numChannels, true);
+    dv.setUint32(24, sampleRate, true);
+    dv.setUint32(28, sampleRate * blockAlign, true); // byte rate
+    dv.setUint16(32, blockAlign, true);
+    dv.setUint16(34, 16, true); // bits per sample
+
+    // data chunk
+    writeStr(36, 'data');
+    dv.setUint32(40, dataSize, true);
+
+    // Write interleaved samples
+    let offset = 44;
+    for (let i=0; i<numFrames; i++) {
+      for (let ch=0; ch<numChannels; ch++) {
+        const sample = clamp(channelData[ch][i], -1, 1);
+        // Scale float32 [-1,1] to int16
+        const s = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        dv.setInt16(offset, s, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([ab], { type: 'audio/wav' });
+  }
+
+  // ---- Visualization -------------------------------------------------------
+  function drawWaveform(audioBuffer, canvas){
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width = canvas.clientWidth * devicePixelRatio;
+    const H = canvas.height = canvas.clientHeight * devicePixelRatio;
+    ctx.clearRect(0,0,W,H);
+
+    // Mixdown to mono for visualization
+    const n = audioBuffer.numberOfChannels;
+    const len = audioBuffer.length;
+    const data = new Float32Array(len);
+    for (let ch=0; ch<n; ch++) {
+      const chData = audioBuffer.getChannelData(ch);
+      for (let i=0; i<len; i++) data[i] += chData[i] / n;
+    }
+
+    // Draw min/max envelope per column for speed
+    const step = Math.ceil(len / W);
+    ctx.lineWidth = Math.max(1, Math.round(devicePixelRatio));
+    ctx.strokeStyle = '#82cfff';
+    ctx.beginPath();
+    for (let x=0; x<W; x++) {
+      const start = x * step;
+      let min = 1, max = -1;
+      for (let i=start; i<start+step && i<len; i++) { const v = data[i]; if (v < min) min = v; if (v > max) max = v; }
+      const y1 = (1 - (max * 0.9 + 1)/2) * H; // 0.9 for a bit of headroom
+      const y2 = (1 - (min * 0.9 + 1)/2) * H;
+      ctx.moveTo(x+0.5, y1); ctx.lineTo(x+0.5, y2);
+    }
+    ctx.stroke();
+  }
+})();
+</script>
+</body>
+</html>

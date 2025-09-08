@@ -86,7 +86,8 @@
     </div>
   </div>
 
-<script>
+<script type="module">
+import { TARGET_SAMPLE_RATE, humanTime, clamp, bytesHuman } from './utils.js';
 (() => {
   // ---- Utilities -----------------------------------------------------------
   const $ = (sel) => document.querySelector(sel);
@@ -105,16 +106,6 @@
 
   let files = { A: null, B: null };
   let lastBlobUrl = null;
-
-  const TARGET_SAMPLE_RATE = 44100; // Common denominator; browsers will resample if needed
-
-  function humanTime(seconds) {
-    if (!isFinite(seconds)) return '—';
-    const m = Math.floor(seconds / 60);
-    const s = Math.round(seconds % 60).toString().padStart(2,'0');
-    return `${m}:${s}`;
-  }
-  function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
 
   function setStatus(text, kind='info') {
     statusEl.textContent = text;
@@ -208,12 +199,6 @@
       processBtn.disabled = !(files.A && files.B);
     }
   });
-
-  function bytesHuman(n){
-    if (n < 1024) return n + ' B';
-    const u = ['KB','MB','GB']; let i = -1; do { n/=1024; i++; } while (n>=1024 && i<u.length-1);
-    return n.toFixed(n<10?2:1)+' '+u[i];
-  }
 
   function suggestOutName(a, b){
     function base(n){ return (n||'track').replace(/\.[^.]+$/, ''); }

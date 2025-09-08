@@ -18,5 +18,7 @@ describe('utility functions', () => {
 
   it('suggests output name based on inputs', () => {
     expect(suggestOutName('a.mp3', 'b.wav')).toBe('a__AVERAGE__b.wav');
+    expect(suggestOutName('a.mp3', 'b.wav', 'c.ogg')).toBe('a__AVERAGE__b__AVERAGE__c.wav');
+    expect(suggestOutName('a.mp3')).toBe('a.wav');
   });
 });

@@ -17,9 +17,10 @@ export function bytesHuman(n) {
   return n.toFixed(n < 10 ? 2 : 1) + ' ' + u[i];
 }
 
-export function suggestOutName(a, b) {
+export function suggestOutName(...names) {
   function base(n) { return (n || 'track').replace(/\.[^.]+$/, ''); }
-  return `${base(a)}__AVERAGE__${base(b)}.wav`;
+  const parts = names.filter(Boolean).map(base);
+  return `${(parts.length ? parts : ['track']).join('__AVERAGE__')}.wav`;
 }
 
 export function audioBufferToWav(buffer) {

@@ -63,6 +63,7 @@
       <div class="actions">
         <button class="primary" id="processBtn" disabled>Average Tracks</button>
         <button id="clearBtn">Clear</button>
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="checkbox" id="normalizeToggle">Normalize levels</label>
         <span class="meta" id="status">Pick one or more files (MP3, WAV, OGG, M4A… as your browser supports).</span>
       </div>
 
@@ -162,6 +163,7 @@ function audioBufferToWav(buffer) {
   const metaEl = $('#meta');
   const processBtn = $('#processBtn');
   const clearBtn = $('#clearBtn');
+  const normalizeToggle = $('#normalizeToggle');
   const statusEl = $('#status');
   const resultWrap = $('#result');
   const player = $('#player');
@@ -232,6 +234,10 @@ function audioBufferToWav(buffer) {
       const minFrames = Math.min(...buffers.map(b=>b.length));
       const duration = minFrames / targetSR;
 
+      if (normalizeToggle.checked) {
+        normalizeBuffers(buffers, minFrames);
+      }
+
       // Average the samples across all tracks
       const out = new AudioBuffer({ length: minFrames, numberOfChannels: maxCh, sampleRate: targetSR });
       for (let ch = 0; ch < maxCh; ch++) {
@@ -301,6 +307,27 @@ function audioBufferToWav(buffer) {
     if (ch < n) return buf.getChannelData(ch);
     // Fallback: if buffer has fewer channels, reuse channel 0 (mono duplication) or last channel.
     return buf.getChannelData(Math.min(0, n-1));
+  }
+
+  function normalizeBuffers(buffers, length){
+    const len = length ?? Math.min(...buffers.map(b=>b.length));
+    const sums = buffers.map(buf => {
+      let sum = 0;
+      for (let ch=0; ch<buf.numberOfChannels; ch++){
+        const data = buf.getChannelData(ch);
+        for (let i=0; i<len; i++) sum += Math.abs(data[i]);
+      }
+      return sum;
+    });
+    const target = sums.reduce((a,b)=>a+b,0) / (sums.length || 1);
+    buffers.forEach((buf, idx) => {
+      const factor = sums[idx] ? target / sums[idx] : 1;
+      if (factor === 1) return;
+      for (let ch=0; ch<buf.numberOfChannels; ch++){
+        const data = buf.getChannelData(ch);
+        for (let i=0; i<len; i++) data[i] *= factor;
+      }
+    });
   }
 
   async function resampleBuffer(sourceBuffer, targetSampleRate){

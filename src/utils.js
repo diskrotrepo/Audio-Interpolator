@@ -23,6 +23,27 @@ export function suggestOutName(...names) {
   return `${(parts.length ? parts : ['track']).join('__AVERAGE__')}.wav`;
 }
 
+export function normalizeBuffers(buffers, length) {
+  const len = length ?? Math.min(...buffers.map(b => b.length));
+  const sums = buffers.map(buf => {
+    let sum = 0;
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const data = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) sum += Math.abs(data[i]);
+    }
+    return sum;
+  });
+  const target = sums.reduce((a, b) => a + b, 0) / (sums.length || 1);
+  buffers.forEach((buf, idx) => {
+    const factor = sums[idx] ? target / sums[idx] : 1;
+    if (factor === 1) return;
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const data = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) data[i] *= factor;
+    }
+  });
+}
+
 export function audioBufferToWav(buffer) {
   // 16-bit PCM WAV
   const numChannels = buffer.numberOfChannels;

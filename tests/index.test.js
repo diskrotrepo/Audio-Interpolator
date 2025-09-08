@@ -15,4 +15,11 @@ describe('index.html offline readiness', () => {
     expect(inputs.length).toBe(1);
     expect(inputs[0]).toMatch(/multiple/);
   });
+
+  it('includes a normalization toggle', async () => {
+    const html = await readFile(join('src', 'index.html'), 'utf8');
+    const toggle = html.match(/<input[^>]*id="normalizeToggle"[^>]*>/);
+    expect(toggle).not.toBeNull();
+    expect(toggle[0]).toMatch(/type="checkbox"/);
+  });
 });

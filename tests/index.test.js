@@ -8,4 +8,11 @@ describe('index.html offline readiness', () => {
     expect(html).not.toMatch(/<script[^>]*type="module"/);
     expect(html).not.toMatch(/\bimport\s/);
   });
+
+  it('uses a single file input that accepts multiple files', async () => {
+    const html = await readFile(join('src', 'index.html'), 'utf8');
+    const inputs = html.match(/<input[^>]*type="file"[^>]*>/g) || [];
+    expect(inputs.length).toBe(1);
+    expect(inputs[0]).toMatch(/multiple/);
+  });
 });

@@ -52,27 +52,18 @@
     </header>
 
     <div class="card">
-      <div class="row">
-        <div class="drop" id="dropA">
-          <div>
-            <div style="margin-bottom:8px; font-weight:700; color:#d5e3f1">Track A</div>
-            <div>Drop an audio file here, or <label><input id="fileA" type="file" accept="audio/*">choose a file</label></div>
-            <div class="meta" id="metaA"></div>
-          </div>
-        </div>
-        <div class="drop" id="dropB">
-          <div>
-            <div style="margin-bottom:8px; font-weight:700; color:#d5e3f1">Track B</div>
-            <div>Drop an audio file here, or <label><input id="fileB" type="file" accept="audio/*">choose a file</label></div>
-            <div class="meta" id="metaB"></div>
-          </div>
+      <div class="drop" id="dropZone">
+        <div>
+          <div style="margin-bottom:8px; font-weight:700; color:#d5e3f1">Tracks</div>
+          <div>Drop audio files here, or <label><input id="fileInput" type="file" accept="audio/*" multiple>choose files</label></div>
+          <div class="meta" id="meta"></div>
         </div>
       </div>
-
+      
       <div class="actions">
         <button class="primary" id="processBtn" disabled>Average Tracks</button>
         <button id="clearBtn">Clear</button>
-        <span class="meta" id="status">Pick two files (MP3, WAV, OGG, M4A… as your browser supports).</span>
+        <span class="meta" id="status">Pick one or more files (MP3, WAV, OGG, M4A… as your browser supports).</span>
       </div>
 
       <div class="result" id="result" hidden>
@@ -107,9 +98,10 @@ function bytesHuman(n) {
   return n.toFixed(n < 10 ? 2 : 1) + ' ' + u[i];
 }
 
-function suggestOutName(a, b) {
+function suggestOutName(...names) {
   function base(n) { return (n || 'track').replace(/\.[^.]+$/, ''); }
-  return `${base(a)}__AVERAGE__${base(b)}.wav`;
+  const parts = names.filter(Boolean).map(base);
+  return `${(parts.length ? parts : ['track']).join('__AVERAGE__')}.wav`;
 }
 
 function audioBufferToWav(buffer) {
@@ -165,9 +157,9 @@ function audioBufferToWav(buffer) {
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-  const fileEls = { A: $('#fileA'), B: $('#fileB') };
-  const dropEls = { A: $('#dropA'), B: $('#dropB') };
-  const metaEls = { A: $('#metaA'), B: $('#metaB') };
+  const fileInput = $('#fileInput');
+  const dropZone = $('#dropZone');
+  const metaEl = $('#meta');
   const processBtn = $('#processBtn');
   const clearBtn = $('#clearBtn');
   const statusEl = $('#status');
@@ -176,7 +168,7 @@ function audioBufferToWav(buffer) {
   const stats = $('#stats');
   const wave = $('#wave');
 
-  let files = { A: null, B: null };
+  let files = [];
   let lastBlobUrl = null;
 
   const TARGET_SAMPLE_RATE = 44100; // Common denominator; browsers will resample if needed
@@ -186,65 +178,69 @@ function audioBufferToWav(buffer) {
     statusEl.style.color = kind === 'error' ? '#ff9c9c' : kind === 'ok' ? '#8ef18e' : '#aab6c4';
   }
 
-  function enableProcessIfReady(){ processBtn.disabled = !(files.A && files.B); }
+  function enableProcessIfReady(){ processBtn.disabled = files.length === 0; }
 
-  function hookDrop(zoneKey){
-    const dz = dropEls[zoneKey];
+  function hookDrop(){
+    const dz = dropZone;
     dz.addEventListener('dragover', (e)=>{ e.preventDefault(); dz.classList.add('dragover'); });
     dz.addEventListener('dragleave', ()=> dz.classList.remove('dragover'));
     dz.addEventListener('drop', (e)=>{
       e.preventDefault(); dz.classList.remove('dragover');
-      const f = e.dataTransfer.files?.[0]; if (f) setFile(zoneKey, f);
+      const fs = e.dataTransfer.files; if (fs?.length) setFiles(fs);
     });
   }
 
-  async function setFile(zoneKey, file){
-    files[zoneKey] = file;
-    metaEls[zoneKey].textContent = `${file.name} • ${(file.size/1024/1024).toFixed(2)} MB`;
+  async function setFiles(fileList){
+    files = Array.from(fileList);
+    const total = files.reduce((s,f)=>s+f.size,0);
+    metaEl.textContent = `${files.map(f=>f.name).join(', ')} • ${(total/1024/1024).toFixed(2)} MB`;
     enableProcessIfReady();
     setStatus('Ready to average.');
   }
 
-  Object.entries(fileEls).forEach(([k, el])=>{
-    el.addEventListener('change', (e)=>{ const f = el.files?.[0]; if (f) setFile(k, f); });
-  });
-  hookDrop('A'); hookDrop('B');
+  fileInput.addEventListener('change', ()=>{ const fs = fileInput.files; if (fs?.length) setFiles(fs); });
+  hookDrop();
 
   clearBtn.addEventListener('click', ()=>{
-    files = { A: null, B: null };
-    Object.values(fileEls).forEach(el=> el.value='');
-    Object.values(metaEls).forEach(el=> el.textContent='');
-    processBtn.disabled = true; setStatus('Pick two files.');
+    files = [];
+    fileInput.value='';
+    metaEl.textContent='';
+    processBtn.disabled = true; setStatus('Pick one or more files.');
     resultWrap.hidden = true; if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
   });
 
   processBtn.addEventListener('click', async ()=>{
-    if (!(files.A && files.B)) return;
+    if (files.length === 0) return;
     processBtn.disabled = true; setStatus('Decoding audio… this runs locally.');
 
     try {
-      const { buffer: bufA, info: infoA } = await decodeFile(files.A);
-      const { buffer: bufB, info: infoB } = await decodeFile(files.B);
+      const decoded = [];
+      for (const f of files) {
+        const { buffer } = await decodeFile(f);
+        decoded.push(buffer);
+      }
 
       setStatus('Normalizing sample rates/channels…');
 
       const targetSR = TARGET_SAMPLE_RATE;
-      const A = (bufA.sampleRate === targetSR) ? bufA : await resampleBuffer(bufA, targetSR);
-      const B = (bufB.sampleRate === targetSR) ? bufB : await resampleBuffer(bufB, targetSR);
+      const buffers = [];
+      for (const buf of decoded) {
+        buffers.push(buf.sampleRate === targetSR ? buf : await resampleBuffer(buf, targetSR));
+      }
 
-      const maxCh = Math.max(A.numberOfChannels, B.numberOfChannels);
-      const minFrames = Math.min(A.length, B.length);
+      const maxCh = Math.max(...buffers.map(b=>b.numberOfChannels));
+      const minFrames = Math.min(...buffers.map(b=>b.length));
       const duration = minFrames / targetSR;
 
-      // Average the samples, channel-by-channel
+      // Average the samples across all tracks
       const out = new AudioBuffer({ length: minFrames, numberOfChannels: maxCh, sampleRate: targetSR });
       for (let ch = 0; ch < maxCh; ch++) {
         const outData = out.getChannelData(ch);
-        const aData = getChannelOrFallback(A, ch);
-        const bData = getChannelOrFallback(B, ch);
+        const channelArrays = buffers.map(b=>getChannelOrFallback(b, ch));
         for (let i=0; i<minFrames; i++) {
-          // Mean of the two waveforms
-          outData[i] = (aData[i] + bData[i]) * 0.5;
+          let sum = 0;
+          for (const arr of channelArrays) sum += arr[i];
+          outData[i] = sum / channelArrays.length;
         }
       }
 
@@ -262,7 +258,7 @@ function audioBufferToWav(buffer) {
       drawWaveform(out, wave);
 
       // Offer a download
-      const dlName = suggestOutName(files.A?.name, files.B?.name);
+      const dlName = suggestOutName(...files.map(f=>f.name));
       addOrUpdateDownloadLink(url, dlName);
 
       setStatus('Done! Everything was processed locally.', 'ok');
@@ -270,7 +266,7 @@ function audioBufferToWav(buffer) {
       console.error(err);
       setStatus(`Error: ${err?.message || err}`, 'error');
     } finally {
-      processBtn.disabled = !(files.A && files.B);
+      enableProcessIfReady();
     }
   });
 

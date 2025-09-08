@@ -1,0 +1,4 @@
+node_modules/
+
+# Vitest coverage or caches
+coverage/

@@ -64,6 +64,7 @@
         <button class="primary" id="processBtn" disabled>Average Tracks</button>
         <button id="clearBtn">Clear</button>
         <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="checkbox" id="normalizeToggle">Normalize levels</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;"><input type="checkbox" id="lengthAverageToggle">Stretch to average length</label>
         <span class="meta" id="status">Pick one or more files (MP3, WAV, OGG, M4A… as your browser supports).</span>
       </div>
 
@@ -103,6 +104,47 @@ function suggestOutName(...names) {
   function base(n) { return (n || 'track').replace(/\.[^.]+$/, ''); }
   const parts = names.filter(Boolean).map(base);
   return `${(parts.length ? parts : ['track']).join('__AVERAGE__')}.wav`;
+}
+
+function stretchChannelData(data, targetLength) {
+  if (targetLength < 1) throw new Error('Target length must be at least 1 sample');
+  const sourceLength = data.length;
+  if (sourceLength === 0) throw new Error('Cannot stretch empty channel data');
+  if (targetLength === sourceLength) return new Float32Array(data);
+  if (sourceLength === 1) return new Float32Array(targetLength).fill(data[0]);
+  if (targetLength === 1) return new Float32Array([data[0]]);
+
+  const out = new Float32Array(targetLength);
+  const scale = (sourceLength - 1) / (targetLength - 1);
+  for (let i = 0; i < targetLength; i++) {
+    const pos = i * scale;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const nextIdx = Math.min(sourceLength - 1, idx + 1);
+    out[i] = data[idx] * (1 - frac) + data[nextIdx] * frac;
+  }
+  return out;
+}
+
+function stretchBuffer(buffer, targetLength) {
+  const { numberOfChannels, sampleRate } = buffer;
+  const out = new AudioBuffer({ length: targetLength, numberOfChannels, sampleRate });
+  for (let ch = 0; ch < numberOfChannels; ch++) {
+    const stretched = stretchChannelData(buffer.getChannelData(ch), targetLength);
+    out.getChannelData(ch).set(stretched);
+  }
+  return out;
+}
+
+function bufferStrength(buffer, length) {
+  const len = Math.min(buffer.length, length ?? buffer.length);
+  if (!Number.isFinite(len) || len < 1) throw new Error('Strength length must be at least 1 sample');
+  let sum = 0;
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch);
+    for (let i = 0; i < len; i++) sum += Math.abs(data[i]);
+  }
+  return sum / (len * buffer.numberOfChannels);
 }
 
 function audioBufferToWav(buffer) {
@@ -164,6 +206,7 @@ function audioBufferToWav(buffer) {
   const processBtn = $('#processBtn');
   const clearBtn = $('#clearBtn');
   const normalizeToggle = $('#normalizeToggle');
+  const lengthAverageToggle = $('#lengthAverageToggle');
   const statusEl = $('#status');
   const resultWrap = $('#result');
   const player = $('#player');
@@ -231,19 +274,32 @@ function audioBufferToWav(buffer) {
       }
 
       const maxCh = Math.max(...buffers.map(b=>b.numberOfChannels));
-      const minFrames = Math.min(...buffers.map(b=>b.length));
-      const duration = minFrames / targetSR;
+      const lengths = buffers.map(b=>b.length);
+      const targetFrames = lengthAverageToggle.checked
+        ? Math.round(lengths.reduce((a,b)=>a+b,0) / lengths.length)
+        : Math.min(...lengths);
+      if (!Number.isFinite(targetFrames) || targetFrames < 1) throw new Error('Unable to determine target length');
+      const duration = targetFrames / targetSR;
 
-      if (normalizeToggle.checked) {
-        normalizeBuffers(buffers, minFrames);
+      let processedBuffers = buffers;
+      if (lengthAverageToggle.checked) {
+        setStatus('Stretching tracks to average length…');
+        processedBuffers = buffers.map(buf => buf.length === targetFrames ? buf : stretchBuffer(buf, targetFrames));
       }
 
+      if (normalizeToggle.checked) {
+        normalizeBuffers(processedBuffers, targetFrames);
+      }
+
+      const strengths = processedBuffers.map(buf => bufferStrength(buf, targetFrames));
+      const meanStrength = strengths.reduce((a, b) => a + b, 0) / (strengths.length || 1);
+
       // Average the samples across all tracks
-      const out = new AudioBuffer({ length: minFrames, numberOfChannels: maxCh, sampleRate: targetSR });
+      const out = new AudioBuffer({ length: targetFrames, numberOfChannels: maxCh, sampleRate: targetSR });
       for (let ch = 0; ch < maxCh; ch++) {
         const outData = out.getChannelData(ch);
-        const channelArrays = buffers.map(b=>getChannelOrFallback(b, ch));
-        for (let i=0; i<minFrames; i++) {
+        const channelArrays = processedBuffers.map(b=>getChannelOrFallback(b, ch));
+        for (let i=0; i<targetFrames; i++) {
           let sum = 0;
           for (const arr of channelArrays) sum += arr[i];
           outData[i] = sum / channelArrays.length;
@@ -259,7 +315,7 @@ function audioBufferToWav(buffer) {
 
       // Update UI
       player.src = url; player.load();
-      stats.textContent = `Result: ${maxCh} ch · ${targetSR} Hz · ${humanTime(duration)} · ${bytesHuman(wavBlob.size)}`;
+      stats.textContent = `Result: ${maxCh} ch · ${targetSR} Hz · ${humanTime(duration)} · ${bytesHuman(wavBlob.size)} · avg strength ${meanStrength.toFixed(4)}`;
       resultWrap.hidden = false;
       drawWaveform(out, wave);
 
@@ -304,9 +360,10 @@ function audioBufferToWav(buffer) {
 
   function getChannelOrFallback(buf, ch){
     const n = buf.numberOfChannels;
+    if (n < 1) throw new Error('Buffer has no channels');
     if (ch < n) return buf.getChannelData(ch);
     // Fallback: if buffer has fewer channels, reuse channel 0 (mono duplication) or last channel.
-    return buf.getChannelData(Math.min(0, n-1));
+    return buf.getChannelData(Math.min(ch, n-1));
   }
 
   function normalizeBuffers(buffers, length){

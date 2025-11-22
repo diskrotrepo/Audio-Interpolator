@@ -23,6 +23,58 @@ export function suggestOutName(...names) {
   return `${(parts.length ? parts : ['track']).join('__AVERAGE__')}.wav`;
 }
 
+export function stretchChannelData(data, targetLength) {
+  if (targetLength < 1) throw new Error('Target length must be at least 1 sample');
+  const sourceLength = data.length;
+  if (sourceLength === 0) throw new Error('Cannot stretch empty channel data');
+  if (targetLength === sourceLength) return new Float32Array(data);
+  if (sourceLength === 1) return new Float32Array(targetLength).fill(data[0]);
+  if (targetLength === 1) return new Float32Array([data[0]]);
+
+  const out = new Float32Array(targetLength);
+  const scale = (sourceLength - 1) / (targetLength - 1);
+  for (let i = 0; i < targetLength; i++) {
+    const pos = i * scale;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const nextIdx = Math.min(sourceLength - 1, idx + 1);
+    out[i] = data[idx] * (1 - frac) + data[nextIdx] * frac;
+  }
+  return out;
+}
+
+export function stretchBuffer(buffer, targetLength, createBuffer) {
+  const maker = createBuffer || ((opts) => {
+    if (typeof AudioBuffer === 'undefined') throw new Error('AudioBuffer is not available');
+    return new AudioBuffer(opts);
+  });
+  const { numberOfChannels, sampleRate } = buffer;
+  const out = maker({ length: targetLength, numberOfChannels, sampleRate });
+  for (let ch = 0; ch < numberOfChannels; ch++) {
+    const stretched = stretchChannelData(buffer.getChannelData(ch), targetLength);
+    out.getChannelData(ch).set(stretched);
+  }
+  return out;
+}
+
+export function bufferStrength(buffer, length) {
+  const len = Math.min(buffer.length, length ?? buffer.length);
+  if (!Number.isFinite(len) || len < 1) throw new Error('Strength length must be at least 1 sample');
+  let sum = 0;
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch);
+    for (let i = 0; i < len; i++) sum += Math.abs(data[i]);
+  }
+  return sum / (len * buffer.numberOfChannels);
+}
+
+export function getChannelOrFallback(buf, ch) {
+  const n = buf.numberOfChannels;
+  if (n < 1) throw new Error('Buffer has no channels');
+  if (ch < n) return buf.getChannelData(ch);
+  return buf.getChannelData(Math.min(ch, n - 1));
+}
+
 export function normalizeBuffers(buffers, length) {
   const len = length ?? Math.min(...buffers.map(b => b.length));
   const sums = buffers.map(buf => {

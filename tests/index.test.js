@@ -22,4 +22,11 @@ describe('index.html offline readiness', () => {
     expect(toggle).not.toBeNull();
     expect(toggle[0]).toMatch(/type="checkbox"/);
   });
+
+  it('includes a length averaging toggle', async () => {
+    const html = await readFile(join('src', 'index.html'), 'utf8');
+    const toggle = html.match(/<input[^>]*id="lengthAverageToggle"[^>]*>/);
+    expect(toggle).not.toBeNull();
+    expect(toggle[0]).toMatch(/type="checkbox"/);
+  });
 });
